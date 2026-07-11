@@ -1,10 +1,10 @@
-#AI Cooking Assistant
+Cooking Assistant
 
 A personalized meal recommendation app built during a **MLH Global Hack Week** workshop using **Python**, **Google Colab**, **Gradio**, **Pandas**, and the **Google Gemini API**.
 
 ## Features
 - Create a personalized cooking profile
-- Generate AI meal suggestions based on your preferences and ingredients
+- Generate meal suggestions based on your preferences and ingredients
 - Rate suggestions to improve future recommendations
 - Store profiles and meal history in CSV files
 
