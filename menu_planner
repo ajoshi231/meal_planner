@@ -1,0 +1,739 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/ajoshi231/menu_planner/blob/main/menu_planner\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "bbabd8d0",
+      "metadata": {
+        "id": "bbabd8d0"
+      },
+      "source": [
+        "# 🍳 AI Cooking Assistant\n",
+        "### MLH Global Hack Week — Season Kickoff\n",
+        "\n",
+        "A personalised meal suggester that learns your preferences over time.\n",
+        "\n",
+        "**What we're building:**\n",
+        "1. An onboarding flow that builds your cooking profile\n",
+        "2. A meal suggester that reads your profile and asks Gemini for ideas\n",
+        "3. A feedback loop that rates suggestions and improves over time\n",
+        "\n",
+        "**Stack:** Python · Pandas · Gemini API · Gradio\n",
+        "\n",
+        "---\n",
+        "\n",
+        "> **Getting started on Google Colab:**\n",
+        "> 1. Click the 🔑 key icon in the left sidebar\n",
+        "> 2. Add a secret named `GEMINI_API_KEY`\n",
+        "> 3. Paste your key from [aistudio.google.com](https://aistudio.google.com) (free, no credit card)\n",
+        "> 4. Enable notebook access for the secret\n",
+        "> 5. Run cells from top to bottom following along with the stream\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "03d032ee",
+      "metadata": {
+        "id": "03d032ee"
+      },
+      "source": [
+        "## 0. Setup\n",
+        "\n",
+        "Install dependencies and configure your free Gemini API key.\n",
+        "\n",
+        "Get yours free at [aistudio.google.com](https://aistudio.google.com) — sign in with Google, click **Get API key**. No credit card needed.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 2,
+      "id": "fd0ae720",
+      "metadata": {
+        "id": "fd0ae720"
+      },
+      "outputs": [],
+      "source": [
+        "!pip install gradio google-generativeai pandas -q"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "cb544ea8",
+      "metadata": {
+        "id": "cb544ea8"
+      },
+      "outputs": [],
+      "source": [
+        "import gradio as gr\n",
+        "import google.genai as genai # Updated import to google.genai\n",
+        "import pandas as pd\n",
+        "import os\n",
+        "from pathlib import Path\n",
+        "\n",
+        "# --- API Key Setup ---\n",
+        "# On Google Colab: uses the secrets manager (recommended)\n",
+        "# Locally: paste your key directly into the string below\n",
+        "\n",
+        "try:\n",
+        "    from google.colab import userdata\n",
+        "    API_KEY = userdata.get('GEMINI_API_KEY')\n",
+        "    print(\"✅ Loaded API key from Colab secrets\")\n",
+        "except Exception:\n",
+        "    API_KEY = \"\"  # TODO: paste your key here if running locally\n",
+        "    print(\"Running locally — paste your API key above\")\n",
+        "\n",
+        "if not API_KEY:\n",
+        "    print(\"⚠️  No API key found. Add it to Colab secrets or paste it above.\")\n",
+        "else:\n",
+        "    genai.configure(api_key=API_KEY)\n",
+        "    model = genai.GenerativeModel(\"gemini-1.5-flash\")\n",
+        "    print(\"✅ Gemini ready\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "f8a30052",
+      "metadata": {
+        "id": "f8a30052"
+      },
+      "source": [
+        "## 1. The Profile CSV\n",
+        "\n",
+        "Before we build the UI, let's think about what we're storing.\n",
+        "\n",
+        "Every user has a profile that tracks:\n",
+        "- Their kitchen equipment\n",
+        "- Dietary restrictions and allergies\n",
+        "- Time they typically have available\n",
+        "- Flavour preferences\n",
+        "- Past meal suggestions and how they rated them\n",
+        "\n",
+        "This is what makes suggestions get better over time — the prompt we send Gemini gets richer with every session.\n",
+        "\n",
+        "> **Note on Colab:** the CSV lives in your Colab session storage and resets when your session ends. That's fine for this workshop — in a real app you'd save to Google Drive or a database.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 11,
+      "id": "55afbd08",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "55afbd08",
+        "outputId": "0af6c542-d631-4e8a-d17b-26e73522fdf6"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Profile functions ready ✅\n",
+            "Existing profile: {}\n"
+          ]
+        }
+      ],
+      "source": [
+        "from IPython.core.history import HistoryAccessor\n",
+        "from IPython.core.formatters import ForwardDeclaredInstance\n",
+        "# Profile file locations\n",
+        "PROFILE_PATH = Path(\"data/profile.csv\")\n",
+        "HISTORY_PATH = Path(\"data/history.csv\")\n",
+        "\n",
+        "# Create data directory if it doesn't exist\n",
+        "PROFILE_PATH.parent.mkdir(exist_ok=True)\n",
+        "\n",
+        "# TODO: write a load_profile() function that:\n",
+        "# - checks if PROFILE_PATH exists\n",
+        "# - if it does, reads it with pd.read_csv and returns the first row as a dict\n",
+        "# - if it doesn't, returns an empty dict {}\n",
+        "def load_profile():\n",
+        "    if PROFILE_PATH.exists():\n",
+        "      df = pd.read_csv(PROFILE_PATH)\n",
+        "      return df.iloc[0].to_dict() if len(df) > 0 else {}\n",
+        "    return {}\n",
+        "\n",
+        "# TODO: write a save_profile(profile) function that:\n",
+        "# - takes a dict called profile\n",
+        "# - saves it to PROFILE_PATH as a CSV using pd.DataFrame([profile]).to_csv()\n",
+        "def save_profile(profile: dict):\n",
+        "    pd.DataFrame([profile]).to_csv(PROFILE_PATH, index=False)\n",
+        "    print(\"Profile saved!\")\n",
+        "\n",
+        "# TODO: write a load_history() function that:\n",
+        "# - checks if HISTORY_PATH exists\n",
+        "# - if it does, reads and returns it with pd.read_csv\n",
+        "# - if it doesn't, returns an empty DataFrame with columns [\"meal\", \"rating\", \"date\"]\n",
+        "def load_history():\n",
+        "    if HISTORY_PATH.exists():\n",
+        "      return pd.read_csv(HISTORY_PATH)\n",
+        "    return pd.DataFrame(columns=[\"meal\", \"rating\", \"date\"])\n",
+        "\n",
+        "# TODO: write a save_to_history(meal, rating) function that:\n",
+        "# - loads existing history\n",
+        "# - creates a new row with the meal, rating, and today's date (pd.Timestamp.now().strftime(\"%Y-%m-%d\"))\n",
+        "# - appends it with pd.concat and saves back to HISTORY_PATH\n",
+        "def save_to_history(meal: str, rating: int):\n",
+        "    history = load_history()\n",
+        "    new_row = pd.DataFrame([{\n",
+        "        \"meal\": meal,\n",
+        "        \"rating\": rating,\n",
+        "        \"date\": pd.Timestamp.now().strftime(\"%Y-%m-%d\")}])\n",
+        "    history = pd.concat([history, new_row], ignore_index = True)\n",
+        "    history.to_csv(HISTORY_PATH,index=False)\n",
+        "    print(f\"Your meal has been saved: {meal[.50]}...({rating}/5)\")\n",
+        "\n",
+        "print(\"Profile functions ready ✅\")\n",
+        "print(f\"Existing profile: {load_profile()}\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "fcc3d285",
+      "metadata": {
+        "id": "fcc3d285"
+      },
+      "source": [
+        "## 2. Onboarding UI\n",
+        "\n",
+        "The first time someone uses the app, they answer a series of questions. This gets saved to their profile CSV and used to build smarter prompts.\n",
+        "\n",
+        "We're using **Gradio** to build the UI — it creates a web interface directly from Python with no HTML or CSS needed.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 21,
+      "id": "493cd096",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 612
+        },
+        "id": "493cd096",
+        "outputId": "ad559a86-8292-485a-921f-6352f4fafab9"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Colab notebook detected. To show errors in colab notebook, set debug=True in launch()\n",
+            "* Running on public URL: https://cba451c3acb9391062.gradio.live\n",
+            "\n",
+            "This share link is temporary and will last for up to 1 week (best effort). For free permanent hosting and GPU upgrades, run `gradio deploy` from the terminal in the working directory to deploy to Hugging Face Spaces (https://huggingface.co/spaces)\n"
+          ]
+        },
+        {
+          "output_type": "display_data",
+          "data": {
+            "text/plain": [
+              "<IPython.core.display.HTML object>"
+            ],
+            "text/html": [
+              "<div><iframe src=\"https://cba451c3acb9391062.gradio.live\" width=\"100%\" height=\"500\" allow=\"autoplay; camera; microphone; clipboard-read; clipboard-write;\" frameborder=\"0\" allowfullscreen></iframe></div>"
+            ]
+          },
+          "metadata": {}
+        },
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": []
+          },
+          "metadata": {},
+          "execution_count": 21
+        }
+      ],
+      "source": [
+        "# TODO: write a save_onboarding function that takes these arguments:\n",
+        "# equipment, dietary, allergies, time_available, spice_level, cuisine_prefs\n",
+        "# - builds a profile dict from these values\n",
+        "# - calls save_profile() to save it\n",
+        "# - returns a confirmation string like \"✅ Profile saved!\"\n",
+        "def save_onboarding(equipment, dietary, allergies, time_available, spice_level, cuisine_prefs):\n",
+        "    profile = {\"equipment\": \",\".join(equipment) if equipment else \"hob\",\n",
+        "               \"dietary\": \",\".join(dietary) if dietary else \"none\",\n",
+        "              \"allergies\": allergies or \"none\",\n",
+        "               \"time_available\": time_available,\n",
+        "               \"spice_level\": spice_level,\n",
+        "               \"cuisine_prefs\": \",\".join(cuisine_prefs) if cuisine_prefs else \"varied\"\n",
+        "              }\n",
+        "    save_profile(profile=profile)\n",
+        "    return(f\"Your profile has been saved. Equipment: {profile['equipment']}. Time: {profile['time_available']} mins.\")\n",
+        "\n",
+        "# The Gradio UI is built for you — your job is to wire up the save_onboarding function\n",
+        "with gr.Blocks(title=\"AI Cooking Assistant — Setup\") as onboarding_ui:\n",
+        "    gr.Markdown(\"## 👋 Let's set up your cooking profile\")\n",
+        "    gr.Markdown(\"Answer these once and we'll personalise every suggestion to your kitchen.\")\n",
+        "\n",
+        "    equipment = gr.CheckboxGroup(\n",
+        "        choices=[\"Hob\", \"Oven\", \"Air fryer\", \"Microwave\", \"Instant Pot\", \"BBQ\"],\n",
+        "        label=\"What cooking equipment do you have?\",\n",
+        "        value=[\"Hob\", \"Oven\"]\n",
+        "    )\n",
+        "\n",
+        "    dietary = gr.CheckboxGroup(\n",
+        "        choices=[\"None\", \"Vegetarian\", \"Vegan\", \"Pescatarian\", \"Halal\", \"Kosher\"],\n",
+        "        label=\"Dietary requirements\",\n",
+        "        value=[\"None\"]\n",
+        "    )\n",
+        "\n",
+        "    allergies = gr.Textbox(\n",
+        "        label=\"Any allergies? (e.g. nuts, dairy, gluten)\",\n",
+        "        placeholder=\"Leave blank if none\",\n",
+        "    )\n",
+        "\n",
+        "    time_available = gr.Slider(\n",
+        "        minimum=10, maximum=120, value=30, step=5,\n",
+        "        label=\"How many minutes do you usually have to cook?\"\n",
+        "    )\n",
+        "\n",
+        "    spice_level = gr.Radio(\n",
+        "        choices=[\"Mild\", \"Medium\", \"Hot\", \"Extra hot\"],\n",
+        "        label=\"Spice preference\",\n",
+        "        value=\"Medium\"\n",
+        "    )\n",
+        "\n",
+        "    cuisine_prefs = gr.CheckboxGroup(\n",
+        "        choices=[\"Italian\", \"Asian\", \"Mexican\", \"Indian\", \"Middle Eastern\", \"British\", \"American\", \"French\",\"Mediterranean\"],\n",
+        "        label=\"Favourite cuisines\",\n",
+        "        value=[\"Italian\", \"Asian\"]\n",
+        "    )\n",
+        "\n",
+        "    save_btn = gr.Button(\"Save my profile →\", variant=\"primary\")\n",
+        "    output = gr.Textbox(label=\"Status\")\n",
+        "\n",
+        "    # TODO: wire up the button click to your save_onboarding function\n",
+        "    # save_btn.click(fn=..., inputs=[...], outputs=output)\n",
+        "    save_btn.click(fn=save_onboarding,inputs=[equipment,dietary,allergies,time_available,spice_level,cuisine_prefs],outputs=output)\n",
+        "# share=True is required on Colab\n",
+        "onboarding_ui.launch(share=True)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "55e5dd88",
+      "metadata": {
+        "id": "55e5dd88"
+      },
+      "source": [
+        "## 3. Building the Prompt\n",
+        "\n",
+        "This is the most interesting part — how you structure the prompt determines the quality of the suggestion.\n",
+        "\n",
+        "We build a prompt that includes:\n",
+        "- The user's full profile\n",
+        "- Their past highly-rated meals (so Gemini knows what they like)\n",
+        "- Meals they didn't enjoy (so Gemini avoids them)\n",
+        "- What they have available tonight\n",
+        "\n",
+        "**This is prompt engineering** — the context you give the LLM matters as much as the question itself.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 26,
+      "id": "80372bfd",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "80372bfd",
+        "outputId": "d76a60dd-819e-47a1-bfaa-465c0b88ec4d"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "=== PROMPT SENT TO GEMINI ===\n",
+            "\n",
+            "You are a personal cooking assistant. Suggest ONE specific meal for tonight based on this person's profile.\n",
+            "\n",
+            "    THE COOKING SETUP:\n",
+            "      - Equipment available: Hob, Oven\n",
+            "      - Dietary Requirements:None\n",
+            "      - Allergies: nuts\n",
+            "      - Typical time available: 30 minutes\n",
+            "      - Spice preference: Medium\n",
+            "      - Favorite cuisines: Italian, Asian\n",
+            "\n",
+            "    WHAT THEY'VE ENJOYED BEFORE:\n",
+            "    None recorded\n",
+            "\n",
+            "    MEALS THEY DIDN'T ENJOY:\n",
+            "    None recorded\n",
+            "\n",
+            "    TONIGHT'S INFO:\n",
+            "    I have chicken, some pasta, and about 35 minutes\n",
+            "\n",
+            "    Respond with:\n",
+            "      1. The meal name\n",
+            "      2. Why it suits them specifically\n",
+            "      3. Key ingredients\n",
+            "      4. Time to cook the meal\n",
+            "      5. How to start\n",
+            "    \n",
+            "      Be specific and practical in your response. ONLY SUGGEST ONE MEAL!\n",
+            "    \n"
+          ]
+        }
+      ],
+      "source": [
+        "# TODO: write a build_prompt(tonight_info, profile, history) function that:\n",
+        "# - gets top rated meals from history (rating >= 4)\n",
+        "# - gets avoided meals from history (rating <= 2)\n",
+        "# - builds and returns a prompt string that includes:\n",
+        "#   * the user's equipment, dietary needs, allergies, time, spice level, cuisine prefs\n",
+        "#   * their top rated meals\n",
+        "#   * their avoided meals\n",
+        "#   * tonight_info (what they have available / their situation)\n",
+        "# - asks Gemini to suggest ONE specific meal with: name, why it suits them,\n",
+        "#   key ingredients, time to cook, how to start\n",
+        "def build_prompt(tonight_info: str, profile: dict, history) -> str:\n",
+        "    if len(history) > 0:\n",
+        "      top_meals = history[history[\"rating\"] >= 4][\"meal\"].tolist()\n",
+        "      avoided_meals = history[history[\"rating\"] <= 4][\"meal\"].tolist()\n",
+        "    else:\n",
+        "        top_meals = {}\n",
+        "        avoided_meals = {}\n",
+        "\n",
+        "    prompt = f\"\"\"You are a personal cooking assistant. Suggest ONE specific meal for tonight based on this person's profile.\n",
+        "\n",
+        "    THE COOKING SETUP:\n",
+        "      - Equipment available: {profile.get('equipment','hob')}\n",
+        "      - Dietary Requirements:{profile.get('dietary','none')}\n",
+        "      - Allergies: {profile.get('allergies','none')}\n",
+        "      - Typical time available: {profile.get('time_available',30)} minutes\n",
+        "      - Spice preference: {profile.get('spice_level','mild')}\n",
+        "      - Favorite cuisines: {profile.get('cuisine_prefs','varied')}\n",
+        "\n",
+        "    WHAT THEY'VE ENJOYED BEFORE:\n",
+        "    {','.join(top_meals) if top_meals else \"None recorded\"}\n",
+        "\n",
+        "    MEALS THEY DIDN'T ENJOY:\n",
+        "    {','.join(avoided_meals) if avoided_meals else \"None recorded\"}\n",
+        "\n",
+        "    TONIGHT'S INFO:\n",
+        "    {tonight_info}\n",
+        "\n",
+        "    Respond with:\n",
+        "      1. The meal name\n",
+        "      2. Why it suits them specifically\n",
+        "      3. Key ingredients\n",
+        "      4. Time to cook the meal\n",
+        "      5. How to start\n",
+        "\n",
+        "      Be specific and practical in your response. ONLY SUGGEST ONE MEAL!\n",
+        "    \"\"\"\n",
+        "    return prompt\n",
+        "# Test it — once you've written the function, run this to see what gets sent to Gemini\n",
+        "test_profile = {\n",
+        "    \"equipment\": \"Hob, Oven\",\n",
+        "    \"dietary\": \"None\",\n",
+        "    \"allergies\": \"nuts\",\n",
+        "    \"time_available\": 30,\n",
+        "    \"spice_level\": \"Medium\",\n",
+        "    \"cuisine_prefs\": \"Italian, Asian\"\n",
+        "}\n",
+        "\n",
+        "print(\"=== PROMPT SENT TO GEMINI ===\\n\")\n",
+        "print(build_prompt(\n",
+        "    \"I have chicken, some pasta, and about 35 minutes\",\n",
+        "    test_profile,\n",
+        "    load_history()\n",
+        "))"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "b3a1756d",
+      "metadata": {
+        "id": "b3a1756d"
+      },
+      "source": [
+        "## 4. The Main App\n",
+        "\n",
+        "Now we wire everything together — the user describes their situation tonight, we build the prompt from their profile, call Gemini, and show the suggestion.\n",
+        "\n",
+        "They can then rate it, which gets saved to history and improves future prompts.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "fce0bf5c",
+      "metadata": {
+        "id": "fce0bf5c"
+      },
+      "outputs": [],
+      "source": [
+        "# Store the last suggestion so we can rate it\n",
+        "last_suggestion = {\"text\": \"\"}\n",
+        "\n",
+        "# TODO: write a get_suggestion(tonight_info) function that:\n",
+        "# - returns an error message if tonight_info is empty\n",
+        "# - loads the profile, returns an error if no profile found\n",
+        "# - loads history\n",
+        "# - calls build_prompt() to build the prompt\n",
+        "# - calls model.generate_content(prompt) to get a suggestion\n",
+        "# - stores the suggestion text in last_suggestion[\"text\"]\n",
+        "# - returns the suggestion text and gr.update(visible=True) for the rating row\n",
+        "# - catches exceptions and returns the error message\n",
+        "def get_suggestion(tonight_info: str):\n",
+        "    if not tonight_info:\n",
+        "      return \"Tell me me what you've got: ingredients, time, and how hungry you are?\"\n",
+        "    profile = load_profile()\n",
+        "    if not profile:\n",
+        "      return \"profile not found\"\n",
+        "    history = load_history()\n",
+        "    prompt = build_prompt(tonight_info, profile, history)\n",
+        "\n",
+        "    try:\n",
+        "      response = model.generate_content(prompt)\n",
+        "      suggestion = response.text\n",
+        "      last_suggestion[\"text\"] = suggestion\n",
+        "      return suggestion, gr.update(visible=True)\n",
+        "    except Exception as e:\n",
+        "      return f\"Error with you Gemini pal: {e}\", gr.update(visible=False)\n",
+        "\n",
+        "# TODO: write a rate_suggestion(rating) function that:\n",
+        "# - returns an error if last_suggestion[\"text\"] is empty\n",
+        "# - calls save_to_history() with the first 100 chars of the suggestion and the rating\n",
+        "# - returns a confirmation string\n",
+        "def rate_suggestion(rating: int):\n",
+        "    pass\n",
+        "\n",
+        "with gr.Blocks(title=\"AI Cooking Assistant\") as main_ui:\n",
+        "    gr.Markdown(\"## 🍳 What should I cook tonight?\")\n",
+        "\n",
+        "    tonight = gr.Textbox(\n",
+        "        label=\"What's your situation tonight?\",\n",
+        "        placeholder=\"e.g. I've got chicken, some leftover rice, and about 40 minutes. Pretty tired so nothing too complicated.\",\n",
+        "        lines=3\n",
+        "    )\n",
+        "\n",
+        "    suggest_btn = gr.Button(\"Suggest something →\", variant=\"primary\")\n",
+        "\n",
+        "    suggestion_output = gr.Textbox(\n",
+        "        label=\"Tonight's suggestion\",\n",
+        "        lines=10,\n",
+        "        interactive=False\n",
+        "    )\n",
+        "\n",
+        "    with gr.Column(visible=False) as rating_row:\n",
+        "        gr.Markdown(\"### How does that sound?\")\n",
+        "        with gr.Row():\n",
+        "            rating = gr.Slider(minimum=1, maximum=5, value=3, step=1, label=\"Rate this suggestion (1-5)\")\n",
+        "            rate_btn = gr.Button(\"Save rating\")\n",
+        "        rating_status = gr.Textbox(label=\"\", interactive=False)\n",
+        "\n",
+        "    # TODO: wire up suggest_btn.click to get_suggestion\n",
+        "    # inputs: [tonight], outputs: [suggestion_output, rating_row]\n",
+        "    suggest_btn.click(fn=get_suggestion,inputs=[tonight],outputs=[rating_status])\n",
+        "    # TODO: wire up rate_btn.click to rate_suggestion\n",
+        "    # inputs: [rating], outputs: [rating_status]\n",
+        "\n",
+        "# share=True required on Colab\n",
+        "main_ui.launch(share=True)"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 666
+        },
+        "id": "EQXstl1TuDql",
+        "outputId": "f3b4e2f8-2abd-41d3-cbcc-77c5d40633bb"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Colab notebook detected. This cell will run indefinitely so that you can see errors and logs. To turn off, set debug=False in launch().\n",
+            "* Running on public URL: https://77c75602f9848426a0.gradio.live\n",
+            "\n",
+            "This share link is temporary and will last for up to 1 week (best effort). For free permanent hosting and GPU upgrades, run `gradio deploy` from the terminal in the working directory to deploy to Hugging Face Spaces (https://huggingface.co/spaces)\n"
+          ]
+        },
+        {
+          "output_type": "display_data",
+          "data": {
+            "text/plain": [
+              "<IPython.core.display.HTML object>"
+            ],
+            "text/html": [
+              "<div><iframe src=\"https://77c75602f9848426a0.gradio.live\" width=\"100%\" height=\"500\" allow=\"autoplay; camera; microphone; clipboard-read; clipboard-write;\" frameborder=\"0\" allowfullscreen></iframe></div>"
+            ]
+          },
+          "metadata": {}
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "/usr/local/lib/python3.12/dist-packages/gradio/routes.py:1379: StarletteDeprecationWarning: 'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead.\n",
+            "  return await queue_join_helper(body, request, username)\n",
+            "WARNING:tornado.access:404 POST /v1beta/models/gemini-1.5-flash:generateContent?%24alt=json%3Benum-encoding%3Dint (::1) 484.97ms\n"
+          ]
+        }
+      ],
+      "source": [
+        "# Store the last suggestion so we can rate it\n",
+        "last_suggestion = {\"text\": \"\"}\n",
+        "\n",
+        "# TODO: write a get_suggestion(tonight_info) function that:\n",
+        "# - returns an error message if tonight_info is empty\n",
+        "# - loads the profile, returns an error if no profile found\n",
+        "# - loads history\n",
+        "# - calls build_prompt() to build the prompt\n",
+        "# - calls model.generate_content(prompt) to get a suggestion\n",
+        "# - stores the suggestion text in last_suggestion[\"text\"]\n",
+        "# - returns the suggestion text and gr.update(visible=True) for the rating row\n",
+        "# - catches exceptions and returns the error message\n",
+        "def get_suggestion(tonight_info: str):\n",
+        "    if not tonight_info:\n",
+        "      return \"Tell me me what you've got: ingredients, time, and how hungry you are?\"\n",
+        "    profile = load_profile()\n",
+        "    if not profile:\n",
+        "      return \"profile not found\"\n",
+        "    history = load_history()\n",
+        "    prompt = build_prompt(tonight_info, profile, history)\n",
+        "\n",
+        "    try:\n",
+        "      response = model.generate_content(prompt)\n",
+        "      suggestion = response.text\n",
+        "      last_suggestion[\"text\"] = suggestion\n",
+        "      return suggestion, gr.update(visible=True)\n",
+        "    except Exception as e:\n",
+        "      return f\"Error with you Gemini pal: {e}\", gr.update(visible=False)\n",
+        "\n",
+        "# TODO: write a rate_suggestion(rating) function that:\n",
+        "# - returns an error if last_suggestion[\"text\"] is empty\n",
+        "# - calls save_to_history() with the first 100 chars of the suggestion and the rating\n",
+        "# - returns a confirmation string\n",
+        "def rate_suggestion(rating: int):\n",
+        "    if not last_suggestion[\"text\"]:\n",
+        "        return \"Error: No suggestion to rate. Get a suggestion first!\"\n",
+        "\n",
+        "    meal_name = last_suggestion[\"text\"].splitlines()[0]\n",
+        "    if len(meal_name) > 100:\n",
+        "        meal_name = meal_name[:100] + \"...\"\n",
+        "\n",
+        "    save_to_history(meal_name, rating)\n",
+        "    return f\"Thanks! '{meal_name}' rated {rating}/5 and saved to history.\"\n",
+        "\n",
+        "with gr.Blocks(title=\"AI Cooking Assistant\") as main_ui:\n",
+        "    gr.Markdown(\"## 🍳 What should I cook tonight?\")\n",
+        "\n",
+        "    tonight = gr.Textbox(\n",
+        "        label=\"What's your situation tonight?\",\n",
+        "        placeholder=\"e.g. I've got chicken, some leftover rice, and about 40 minutes. Pretty tired so nothing too complicated.\",\n",
+        "        lines=3\n",
+        "    )\n",
+        "\n",
+        "    suggest_btn = gr.Button(\"Suggest something →\", variant=\"primary\")\n",
+        "\n",
+        "    suggestion_output = gr.Textbox(\n",
+        "        label=\"Tonight's suggestion\",\n",
+        "        lines=10,\n",
+        "        interactive=False\n",
+        "    )\n",
+        "\n",
+        "    with gr.Column(visible=False) as rating_row:\n",
+        "        gr.Markdown(\"### How does that sound?\")\n",
+        "        with gr.Row():\n",
+        "            rating = gr.Slider(minimum=1, maximum=5, value=3, step=1, label=\"Rate this suggestion (1-5)\")\n",
+        "            rate_btn = gr.Button(\"Save rating\")\n",
+        "        rating_status = gr.Textbox(label=\"\", interactive=False)\n",
+        "\n",
+        "    # TODO: wire up suggest_btn.click to get_suggestion\n",
+        "    # inputs: [tonight], outputs: [suggestion_output, rating_row]\n",
+        "    suggest_btn.click(fn=get_suggestion,inputs=[tonight],outputs=[suggestion_output, rating_row])\n",
+        "    # TODO: wire up rate_btn.click to rate_suggestion\n",
+        "    # inputs: [rating], outputs: [rating_status]\n",
+        "    rate_btn.click(fn=rate_suggestion, inputs=[rating], outputs=[rating_status])\n",
+        "\n",
+        "# share=True required on Colab\n",
+        "main_ui.launch(share=True,debug=True)"
+      ],
+      "id": "EQXstl1TuDql"
+    },
+    {
+      "cell_type": "markdown",
+      "id": "b2730fab",
+      "metadata": {
+        "id": "b2730fab"
+      },
+      "source": [
+        "## 5. Your Cooking History\n",
+        "\n",
+        "See how your profile is building up over time.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "b5d2bcd0",
+      "metadata": {
+        "id": "b5d2bcd0"
+      },
+      "outputs": [],
+      "source": [
+        "# TODO: print your profile and history using load_profile() and load_history()\n",
+        "# Show each key/value from the profile\n",
+        "# Show the full history dataframe\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "045cc4fa",
+      "metadata": {
+        "id": "045cc4fa"
+      },
+      "source": [
+        "## 6. Mini Challenge (10 mins)\n",
+        "\n",
+        "Pick one to extend the app:\n",
+        "\n",
+        "1. **Ingredients tracker** — add a fridge inventory to onboarding, update it after each meal suggestion\n",
+        "2. **Weekly planner** — modify the prompt to ask Gemini for 5 meals for the week instead of just tonight\n",
+        "3. **Nutritional goal** — add a dietary goal (high protein, low carb etc) to the profile and include it in the prompt\n",
+        "4. **Cuisine roulette** — add a \"Surprise me\" button that picks a random cuisine outside their usual preferences\n",
+        "\n",
+        "Share your Colab link in the chat when you're done! 🚀\n"
+      ]
+    }
+  ],
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "include_colab_link": true
+    },
+    "language_info": {
+      "name": "python"
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}
